@@ -1,6 +1,6 @@
 import ast
 import pytest
-from asystent_cli.assistant import safe_exec, execute_tool, save_note_function
+from asystent_cli.tools import safe_exec, execute_tool, save_note_function
 
 # ==========================================
 # 1. PODSTAWOWE DZIAŁANIA I MATEMATYKA
@@ -105,18 +105,18 @@ def test_execute_tool_dzielenie_przez_zero():
 
 def test_save_note_function_tworzy_plik_i_dopisuje(tmp_path, monkeypatch):
     from pathlib import Path
-    
+
     # 1. OSZUKUJEMY SYSTEM: Zastępujemy Path.home() naszym tymczasowym folderem testowym
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    
+
     # 2. Wywołujemy naszą funkcję z pierwszą notatką
     save_note_function("Kupić mleko")
-    
+
     # 3. Sprawdzamy czy utworzyła folder Desktop i plik Notes.txt w naszym tmp_path
     plik_testowy = tmp_path / "Desktop" / "Notes.txt"
     assert plik_testowy.exists()
     assert plik_testowy.read_text(encoding="utf-8") == "Kupić mleko\n"
-    
+
     # 4. Wywołujemy z drugą notatką, żeby sprawdzić dopisywanie (tryb "a")
     save_note_function("Jutro lekarz")
     zawartosc = plik_testowy.read_text(encoding="utf-8")
@@ -125,10 +125,10 @@ def test_save_note_function_tworzy_plik_i_dopisuje(tmp_path, monkeypatch):
 def test_execute_tool_save_note_poprawne_dzialanie(tmp_path, monkeypatch):
     from pathlib import Path
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    
+
     # Symulujemy poprawne wywołanie narzędzia przez model
     wynik = execute_tool("save_note", {"note": "Testowa notatka z LLM"})
-    
+
     assert "Zapisano" in wynik
     # Sprawdzamy, czy plik faktycznie powstał
     plik_testowy = tmp_path / "Desktop" / "Notes.txt"
@@ -152,12 +152,12 @@ def test_execute_tool_save_note_blad_systemu(monkeypatch):
     # Zamiast odpalać prawdziwe save_note_function, podstawiamy funkcję, która od razu wybucha
     def fake_save_note(note: str):
         raise PermissionError("Brak uprawnień administratora")
-    
-    import asystent_cli.assistant as module
+
+    import asystent_cli.tools as module
     monkeypatch.setattr(module, "save_note_function", fake_save_note)
-    
+
     wynik = execute_tool("save_note", {"note": "Próba zapisu"})
-    
+
     # Nasz blok try...except w execute_tool powinien to złapać i zwrócić jako string z błędem
     assert "Błąd systemu plików" in wynik
     assert "Brak uprawnień administratora" in wynik

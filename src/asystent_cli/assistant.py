@@ -1,17 +1,16 @@
-"""Asystent CLI z narzędziami.
+"""Logika rozmowy z modelem: system prompt, koszty, pętla tool use.
 
 Kluczowa obserwacja: API jest bezstanowe. To MY (ten kod) trzymamy `history` i wysyłamy
 ją w całości przy każdym wywołaniu — model nic nie pamięta sam z siebie.
 """
 
+import json
+
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
-import json
-import ast
-import operator
-from typing import Any
 
 from asystent_cli.config import Settings
+from asystent_cli.tools import execute_tool, moje_narzedzia
 
 SYSTEM_PROMPT = """Jesteś inteligentnym asystentem CLI. Twoim zadaniem jest pomaganie użytkownikowi, odpowiadając krótko, zwięźle i zawsze w języku polskim.
 
@@ -19,11 +18,11 @@ Zostałeś wyposażony w zewnętrzne narzędzia. Traktuj je jako jedyne źródł
 
 1. OBLICZENIA MATEMATYCZNE (calculate)
 - NIGDY nie wykonuj obliczeń samodzielnie "w pamięci", niezależnie od tego jak proste wydaje się równanie.
-- Zawsze wywołuj narzędzie `calculate`. 
+- Zawsze wywołuj narzędzie `calculate`.
 - Przekazuj wyrażenia jako czysty tekst zrozumiały dla Pythona (np. "120 * (15 / 100)").
 
 2. POGODA (get_weather)
-- Nigdy nie zgaduj ani nie wymyślaj pogody. 
+- Nigdy nie zgaduj ani nie wymyślaj pogody.
 - Zawsze wywołuj narzędzie `get_weather`. Jeśli użytkownik nie podał miasta, poproś go o doprecyzowanie.
 
 3. NOTATKI (save_note)
@@ -60,117 +59,6 @@ Użytkownik: "Ile to 2+2?"
 ZŁA ODPOWIEDŹ: "Teraz użyję narzędzia kalkulatora, żeby to sprawdzić... 2+2 to 4."
 DOBRA ODPOWIEDŹ (Po cichym użyciu narzędzia w tle): "Wynik to 4."
 """
-
-moje_narzedzia: list[dict[str, object]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Zwraca aktualną pogodę dla podanego miasta. Użyj tego narzędzia do pytań o pogodę.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {"type": "string", "description": "Nazwa miasta, np. Kraków, Warszawa"}
-                },
-                "required": ["city"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "calculate",
-            "description": "Oblicza wynik wyrażenia matematycznego. Zawsze używaj tego do obliczeń.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "expression": {"type": "string", "description": "Wyrażenie np. '17 * 3450 / 100'"}
-                },
-                "required": ["expression"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "save_note",
-            "description": "Zapisuje notatkę jako plik .txt na pulpicie. Używaj tego narzędzia do zapisywania notatek.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "note": {"type": "string", "description": "Notatka podana przez użytkownika np. 'Jutro lekarz godzina 15'"}
-                },
-                "required": ["note"]
-            }
-        }
-    }
-]
-
-allowed_operators: dict[type[ast.AST], Any] = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv, #type:ignore
-    ast.Pow: operator.pow, #type:ignore
-    ast.Mod: operator.mod,
-    ast.USub: operator.neg
-}
-
-def safe_exec(wezel: ast.AST) -> float:
-    if isinstance(wezel, ast.Expression):
-        return safe_exec(wezel.body)
-    if isinstance(wezel, ast.Constant) and isinstance(wezel.value, (int, float)):
-        return wezel.value
-    if isinstance(wezel, ast.BinOp):
-        typ_op = type(wezel.op)
-        if typ_op not in allowed_operators:
-            raise ValueError(f"niedozwolony operator: {typ_op.__name__}")
-        return allowed_operators[typ_op](
-            safe_exec(wezel.left),
-            safe_exec(wezel.right),
-        )
-    if isinstance(wezel, ast.UnaryOp):
-        typ_op = type(wezel.op)
-        if typ_op not in allowed_operators:
-            raise ValueError(f"niedozwolony operator: {typ_op.__name__}")
-        return allowed_operators[typ_op](safe_exec(wezel.operand))
-    raise ValueError(f"niedozwolony element wyrażenia: {type(wezel).__name__}")
-
-from pathlib import Path
-
-def save_note_function(note: str) -> None:
-    desktop = Path.home() / "Desktop"
-    desktop.mkdir(parents=True, exist_ok=True)
-    fd = desktop / "Notes.txt"
-
-    with fd.open("a", encoding= "utf-8") as file:
-        file.write(note + "\n")
-
-def execute_tool(name: str, arguments: dict[str, Any]) -> str:
-    if name == "get_weather":
-        city = arguments.get("city", "nieznane miasto")
-        return f"W mieście {city} leje deszcz, jest pochmurno i 12 stopni."
-    elif name == "calculate":
-        try:
-            expr = arguments.get("expression")
-            if not isinstance(expr, str):
-                return "Błąd obliczeń: wyrażenie musi być tekstem."
-            wynik = safe_exec(ast.parse(expr, mode="eval"))
-            return str(wynik)
-        except Exception as e:
-            return f"Błąd obliczeń: {e}"
-    elif name == "save_note":
-        note = arguments.get("note")
-        if not isinstance(note, str):
-            return "Błąd: Treść notatki musi być tekstem"
-        try:
-            save_note_function(note)
-            return "Zapisano notatke na pulpicie"
-        except Exception as e:
-            return f"Błąd systemu plików podczas zapisywania notatki: {e}"
-            
-    else:
-        return f"Błąd: nieznane narzędzie: {name}"
 
 PRICING = {
     "anthropic/claude-haiku-4.5": {"input": 1.00, "output": 5.00},
@@ -239,7 +127,6 @@ def get_response(
             continue
 
         elif choice.finish_reason == "stop":
-            # Model skończył. Wypisujemy wynik.
             print(f"Bot: {choice.message.content}")
             break
 
@@ -251,41 +138,3 @@ def get_response(
         print("\n[Przekroczono limit wywołań narzędzi - zapętlenie!]")
 
     return total_in, total_out
-
-
-def main() -> None:
-    settings = Settings() #type: ignore
-    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=settings.openrouter_api_key)
-
-    history: list[ChatCompletionMessageParam] = [
-        {"role": "system", "content": SYSTEM_PROMPT}
-    ]
-    total_input_tokens = 0
-    total_output_tokens = 0
-
-    print("Witaj w Asystencie CLI z narzędziami! (Wpisz '/exit' aby zakończyć)")
-    print(f"Model: {settings.model}. Komendy: /cost, /exit")
-
-    while True:
-        user_input = input("\nTy: ").strip()
-        if not user_input:
-            continue
-        if user_input == "/exit":
-            break
-        if user_input == "/cost":
-            print_cost(settings.model, total_input_tokens, total_output_tokens)
-            continue
-
-        history.append({"role": "user", "content": user_input})
-
-        total_input_tokens, total_output_tokens = get_response(
-            client,
-            settings,
-            history,
-            total_input_tokens,
-            total_output_tokens
-        )
-
-
-if __name__ == "__main__":
-    main()
