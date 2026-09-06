@@ -1,6 +1,6 @@
 import ast
 import pytest
-from asystent_cli.assistant import safe_exec, execute_tool
+from asystent_cli.assistant import safe_exec, execute_tool, save_note_function
 
 # ==========================================
 # 1. PODSTAWOWE DZIAŁANIA I MATEMATYKA
@@ -98,3 +98,66 @@ def test_execute_tool_dzielenie_przez_zero():
     # Sprawdzamy, czy funkcja wrapper ładnie wyłapuje ZeroDivisionError z safe_exec
     wynik = execute_tool("calculate", {"expression": "10 / 0"})
     assert "Błąd" in wynik or "ZeroDivisionError" in wynik or "dzielenie przez zero" in wynik.lower()
+
+# ==========================================
+# 5. NARZĘDZIE SAVE_NOTE (Zapis na dysku)
+# ==========================================
+
+def test_save_note_function_tworzy_plik_i_dopisuje(tmp_path, monkeypatch):
+    from pathlib import Path
+    
+    # 1. OSZUKUJEMY SYSTEM: Zastępujemy Path.home() naszym tymczasowym folderem testowym
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    
+    # 2. Wywołujemy naszą funkcję z pierwszą notatką
+    save_note_function("Kupić mleko")
+    
+    # 3. Sprawdzamy czy utworzyła folder Desktop i plik Notes.txt w naszym tmp_path
+    plik_testowy = tmp_path / "Desktop" / "Notes.txt"
+    assert plik_testowy.exists()
+    assert plik_testowy.read_text(encoding="utf-8") == "Kupić mleko\n"
+    
+    # 4. Wywołujemy z drugą notatką, żeby sprawdzić dopisywanie (tryb "a")
+    save_note_function("Jutro lekarz")
+    zawartosc = plik_testowy.read_text(encoding="utf-8")
+    assert "Kupić mleko\nJutro lekarz\n" in zawartosc
+
+def test_execute_tool_save_note_poprawne_dzialanie(tmp_path, monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    
+    # Symulujemy poprawne wywołanie narzędzia przez model
+    wynik = execute_tool("save_note", {"note": "Testowa notatka z LLM"})
+    
+    assert "Zapisano" in wynik
+    # Sprawdzamy, czy plik faktycznie powstał
+    plik_testowy = tmp_path / "Desktop" / "Notes.txt"
+    assert plik_testowy.exists()
+    assert "Testowa notatka z LLM" in plik_testowy.read_text(encoding="utf-8")
+
+def test_execute_tool_save_note_brak_klucza():
+    # LLM zapomniał podać argumentu "note"
+    wynik = execute_tool("save_note", {})
+    assert "Błąd" in wynik
+    assert "musi być tekstem" in wynik
+
+def test_execute_tool_save_note_zly_typ():
+    # LLM podał liczbę/słownik zamiast stringa
+    wynik = execute_tool("save_note", {"note": {"text": "zły format"}})
+    assert "Błąd" in wynik
+    assert "musi być tekstem" in wynik
+
+def test_execute_tool_save_note_blad_systemu(monkeypatch):
+    # Symulujemy sytuację, w której system blokuje zapis (np. brak uprawnień)
+    # Zamiast odpalać prawdziwe save_note_function, podstawiamy funkcję, która od razu wybucha
+    def fake_save_note(note: str):
+        raise PermissionError("Brak uprawnień administratora")
+    
+    import asystent_cli.assistant as module
+    monkeypatch.setattr(module, "save_note_function", fake_save_note)
+    
+    wynik = execute_tool("save_note", {"note": "Próba zapisu"})
+    
+    # Nasz blok try...except w execute_tool powinien to złapać i zwrócić jako string z błędem
+    assert "Błąd systemu plików" in wynik
+    assert "Brak uprawnień administratora" in wynik

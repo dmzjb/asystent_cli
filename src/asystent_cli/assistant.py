@@ -46,13 +46,13 @@ moje_narzedzia: list[dict[str, object]] = [
         "type": "function",
         "function": {
             "name": "save_note",
-            "description": "Zapisuje notatkę jako plik .txt w podanej przez użytkownika lokalizacji. Używaj tego narzędzia do zapisywania notatek.",
+            "description": "Zapisuje notatkę jako plik .txt na pulpicie. Używaj tego narzędzia do zapisywania notatek.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "note": {"type": "string", "description": "Notatka podana przez użytkownika np. 'Jutro lekarz godzina 15'"}
                 },
-                "required": ["expression"]
+                "required": ["note"]
             }
         }
     }
@@ -88,6 +88,16 @@ def safe_exec(wezel: ast.AST) -> float:
         return allowed_operators[typ_op](safe_exec(wezel.operand))
     raise ValueError(f"niedozwolony element wyrażenia: {type(wezel).__name__}")
 
+from pathlib import Path
+
+def save_note_function(note: str) -> None:
+    desktop = Path.home() / "Desktop"
+    desktop.mkdir(parents=True, exist_ok=True)
+    fd = desktop / "Notes.txt"
+
+    with fd.open("a", encoding= "utf-8") as file:
+        file.write(note + "\n")
+
 def execute_tool(name: str, arguments: dict[str, Any]) -> str:
     if name == "get_weather":
         city = arguments.get("city", "nieznane miasto")
@@ -101,6 +111,16 @@ def execute_tool(name: str, arguments: dict[str, Any]) -> str:
             return str(wynik)
         except Exception as e:
             return f"Błąd obliczeń: {e}"
+    elif name == "save_note":
+        note = arguments.get("note")
+        if not isinstance(note, str):
+            return "Błąd: Treść notatki musi być tekstem"
+        try:
+            save_note_function(note)
+            return "Zapisano notatke na pulpicie"
+        except Exception as e:
+            return f"Błąd systemu plików podczas zapisywania notatki: {e}"
+            
     else:
         return f"Błąd: nieznane narzędzie: {name}"
 
@@ -134,7 +154,6 @@ def get_response(
     MAX_ITERATIONS = 5
 
     for _ in range(MAX_ITERATIONS):
-        # 1. Wysyłamy żądanie bez streamowania
         response = client.chat.completions.create(
             model=settings.model,
             max_tokens=1000,
@@ -142,42 +161,33 @@ def get_response(
             messages=history,
         )
 
-        # Zliczamy tokeny z odpowiedzi
         if response.usage:
             total_in += response.usage.prompt_tokens
             total_out += response.usage.completion_tokens
 
         choice = response.choices[0]
 
-        # 2. DODAJEMY WIADOMOŚĆ ASYSTENTA DO HISTORII (Kluczowy krok dla OpenAI API!)
-        # W API OpenAI musimy przekazać dict ze szczegółami z choice.message
         message_dict = choice.message.model_dump(exclude_none=True)
         history.append(message_dict) # type: ignore
 
-        # 3. Sprawdzamy dlaczego model zakończył generowanie
         if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
             print("[Bot używa narzędzi...]")
-            # Wywołujemy wszystkie zażądane narzędzia
             for tool_call in choice.message.tool_calls:
                 function_name = tool_call.function.name #type:ignore
-                # Argumenty wracają jako string JSON - trzeba to sparsować
                 try:
                     arguments = json.loads(tool_call.function.arguments) #type:ignore
                 except json.JSONDecodeError:
                     arguments = {}
 
-                # Uruchamiamy nasz kod
                 result = execute_tool(function_name, arguments) #type:ignore
                 print(f"  -> Użyto: {function_name}({arguments}) = {result}")
 
-                # Dodajemy wynik do historii jako wiadomość z rolą 'tool'
                 history.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "content": result,
                 })
 
-            # Pętla wykona się ponownie (iteracja do góry), co wyśle historię z wynikami narzędzi do API
             continue
 
         elif choice.finish_reason == "stop":
@@ -190,7 +200,6 @@ def get_response(
             break
 
     else:
-        # Pętla zakończyła się bez 'break' (czyli przekroczono MAX_ITERATIONS)
         print("\n[Przekroczono limit wywołań narzędzi - zapętlenie!]")
 
     return total_in, total_out
