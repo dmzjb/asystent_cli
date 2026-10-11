@@ -70,5 +70,5 @@ liczenia wyrażenia.
 
 Ten projekt celowo nie używa żadnego frameworka agentowego — pętla `wyślij → sprawdź czy model
 prosi o narzędzie → wykonaj → odeślij wynik → powtórz` jest napisana ręcznie w `assistant.py`.
-To był świadomy wybór edukacyjny: zrozumienie tego mechanizmu bez abstrakcji ułatwia późniejszą
+To był świadomy wybór: zrozumienie tego mechanizmu bez abstrakcji ułatwia późniejszą
 pracę z frameworkami (które robią dokładnie to samo, tylko schowane za wygodniejszym API).
